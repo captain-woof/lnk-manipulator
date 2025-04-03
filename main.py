@@ -16,21 +16,27 @@ def getUshort(contents: bytes, offset: int = 0):
 def getShort(contents: bytes, offset: int = 0):
     return (struct.unpack_from("<h", contents, offset))[0]
 
-def getStringUtf8(contents: bytes, offset: int = 0):
+def getStringUtf8(contents: bytes, offset: int = 0, maxCount = -1):
     length = 0
     while True:
         if contents[offset + length] == 0:
             break
         length += 1
 
+        if maxCount == length:
+            break
+
     return contents[offset:offset + length].decode("utf-8")
 
-def getStringUtf16Le(contents: bytes, offset: int = 0):
+def getStringUtf16Le(contents: bytes, offset: int = 0, maxCount = -1):
     length = 0
     while True:
         if contents[offset + length] == 0:
             break
         length += 2
+
+        if maxCount == int(length / 2):
+            break
 
     return contents[offset:offset + length].decode("utf-16le")
 
@@ -226,12 +232,12 @@ class _LinkTargetIDList:
     sizeOfIdList: int
     itemIdDatas: list[bytes] = []
 
-    def __init__(self, sizeOfShellLinkHeader: int, contents: bytes):
-        if sizeOfShellLinkHeader != 0:
-            self.sizeOfIdList = getUshort(contents, sizeOfShellLinkHeader)
+    def __init__(self, offset: int, contents: bytes):
+        if offset != 0 and contents != None:
+            self.sizeOfIdList = getUshort(contents, offset)
 
             if self.sizeOfIdList != 0:
-                sizeOfItemIdIndex = sizeOfShellLinkHeader + 2
+                sizeOfItemIdIndex = offset + 2
                 while True:
                     sizeOfItemId = getUshort(contents, sizeOfItemIdIndex)
                     if sizeOfItemId == 0:
@@ -278,9 +284,9 @@ class _LinkInfo:
     LocalBasePathUnicode: str = ""
     CommonPathSuffixUnicode: str = ""
 
-    def __init__(self, sizeOfLinkTargetIdList: int, sizeOfshellLinkHeader: int, contents: bytes):
-        if sizeOfLinkTargetIdList != 0:
-            linkInfoOffset = sizeOfshellLinkHeader + sizeOfLinkTargetIdList + 2
+    def __init__(self, offset: int, contents: bytes):
+        if offset != 0 and contents != None:
+            linkInfoOffset = offset + 2
             self.LinkInfoSize = getUint(contents, linkInfoOffset)
 
             if self.LinkInfoSize != 0:
@@ -383,6 +389,79 @@ class _LinkInfo:
         pass # TODO
 
 
+class _StringData:
+    NAME_STRING: str = ""
+    RELATIVE_PATH: str = ""
+    WORKING_DIR: str = ""
+    COMMAND_LINE_ARGUMENTS: str = ""
+    ICON_LOCATION: str = ""
+    NAME_STRING_IS_UNICODE: bool = False
+    RELATIVE_PATH_IS_UNICODE: bool = False
+    WORKING_DIR_IS_UNICODE: bool = False
+    COMMAND_LINE_ARGUMENTS_IS_UNICODE: bool = False
+    ICON_LOCATION_IS_UNICODE: bool = False
+    sizeOfStringData = 0
+
+    def parseString(self, contents: bytes, offset: int):        
+        countCharacters = getUshort(contents, offset)
+        if countCharacters == 0:
+            self.sizeOfStringData += 2
+            return (2, "", False)
+
+        stringData = getStringUtf8(contents, offset + 2, countCharacters)
+        stringDataUnicode = getStringUtf16Le(contents, offset + 2, countCharacters)
+
+        if len(stringData) > len(stringDataUnicode):
+            self.sizeOfStringData += 2 + countCharacters
+            return (2 + countCharacters, stringData, False)
+        elif len(stringData) < len(stringDataUnicode):
+            self.sizeOfStringData += (2 + (countCharacters * 2))
+            return (2 + (countCharacters * 2), stringDataUnicode, True)
+        elif len(stringData) == len(stringDataUnicode) == 0:
+            self.sizeOfStringData += 2
+            return (2, "", False)
+        else:
+            self.sizeOfStringData += 2
+            return (2, "", False)
+
+    def __init__(self, shellLinkHeader: _ShellLinkHeader, offset: int, contents: bytes):
+        if offset != 0 and contents != None:
+            offsetLocal = 0
+
+            # NAME_STRING
+            if shellLinkHeader.HasName:
+                offsetLocalIncrement, self.NAME_STRING, isUnicode = self.parseString(contents, offset + offsetLocal)
+                self.NAME_STRING_IS_UNICODE = isUnicode
+                offsetLocal += offsetLocalIncrement
+
+            # RELATIVE_PATH
+            if shellLinkHeader.HasRelativePath:
+                offsetLocalIncrement, self.RELATIVE_PATH, isUnicode = self.parseString(contents, offset + offsetLocal)
+                self.RELATIVE_PATH_IS_UNICODE = isUnicode
+                offsetLocal += offsetLocalIncrement
+
+            # WORKING_DIR
+            if shellLinkHeader.HasWorkingDir:
+                offsetLocalIncrement, self.WORKING_DIR, isUnicode = self.parseString(contents, offset + offsetLocal)
+                self.WORKING_DIR_IS_UNICODE = isUnicode
+                offsetLocal += offsetLocalIncrement
+
+            # COMMAND_LINE_ARGUMENTS
+            if shellLinkHeader.HasArguments:
+                offsetLocalIncrement, self.COMMAND_LINE_ARGUMENTS, isUnicode = self.parseString(contents, offset + offsetLocal)
+                self.COMMAND_LINE_ARGUMENTS_IS_UNICODE = isUnicode
+                offsetLocal += offsetLocalIncrement
+
+            # ICON_LOCATION
+            if shellLinkHeader.HasIconLocation:
+                offsetLocalIncrement, self.ICON_LOCATION, isUnicode = self.parseString(contents, offset + offsetLocal)
+                self.ICON_LOCATION_IS_UNICODE = isUnicode
+                offsetLocal += offsetLocalIncrement
+
+    def pack(self):
+        pass # TODO
+
+
 # SUB-STRUCTURES CLASSES END
 # ----------------------------------------------------------------------------------
 
@@ -396,6 +475,7 @@ class LNK:
     shellLinkHeader: _ShellLinkHeader = None
     linkTargetIdList: _LinkTargetIDList = None
     linkInfo: _LinkInfo = None
+    stringData: _StringData = None
 
     # ----------------------------------------------------------------------------------
     # FUNCTIONS
@@ -406,17 +486,34 @@ class LNK:
         if lnkFilePath != None:
             with open(lnkFilePath, "rb") as lnkFile:
                 contents = lnkFile.read()
-                self.shellLinkHeader = _ShellLinkHeader(contents)
+                self.shellLinkHeader = _ShellLinkHeader(
+                    contents=contents
+                    )
 
-                self.linkTargetIdList = _LinkTargetIDList(self.shellLinkHeader.HeaderSize, contents)
+                self.linkTargetIdList = _LinkTargetIDList(
+                    offset = self.shellLinkHeader.HeaderSize,
+                    contents = contents
+                    )
 
                 if self.shellLinkHeader.HasLinkInfo:
-                    self.linkInfo = _LinkInfo(self.linkTargetIdList.sizeOfIdList, self.shellLinkHeader.HeaderSize, contents)
+                    self.linkInfo = _LinkInfo(
+                        offset = self.linkTargetIdList.sizeOfIdList + self.shellLinkHeader.HeaderSize, 
+                        contents = contents
+                        )
+
+                self.stringData = _StringData(
+                    shellLinkHeader = self.shellLinkHeader,
+                    offset = self.linkTargetIdList.sizeOfIdList + self.shellLinkHeader.HeaderSize + self.linkInfo.LinkInfoSize,
+                    contents = contents
+                    )
+                
+                # self.extraData TODO
 
         else:
             self.shellLinkHeader = _ShellLinkHeader()
-            self.linkTargetIdList = _LinkTargetIDList(0, None)
-            self.linkInfo = _LinkInfo(0, None)
+            self.linkTargetIdList = _LinkTargetIDList(offset = 0, contents = None)
+            self.linkInfo = _LinkInfo(offset = 0, contents = None)
+            self.stringData = _StringData(shellLinkHeader=self.shellLinkHeader, offset = 0, contents = None)
 
     # Pack into LNK
     def pack(self):
@@ -432,5 +529,7 @@ class LNK:
 ########### MAIN
 if __name__ == "__main__":
     lnk = LNK("calc.lnk")
+
+    packed = lnk.pack()
 
     print("junk")
