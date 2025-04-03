@@ -195,6 +195,34 @@ class _ShellLinkHeader:
             if (hotkeyFlagsHigh & 0x04) != 0:
                 self.HotkeyFlags[0] = "ALT" if self.HotkeyFlags[0] is None else f"{self.HotkeyFlags[0]}+ALT"
 
+    def pack(self):
+        pass # TODO
+
+class _LinkTargetIDList:
+    itemIdDatas: list[bytes] = []
+
+    def __init__(self, sizeOfShellLinkHeader: int, contents: bytes):
+        if sizeOfShellLinkHeader != 0:
+            sizeOfIdList = (struct.unpack_from("<H", contents, sizeOfShellLinkHeader))[0]
+
+            if sizeOfIdList != 0:
+                sizeOfItemIdIndex = sizeOfShellLinkHeader + 2
+                while True:
+                    sizeOfItemId = (struct.unpack_from("<H", contents, sizeOfItemIdIndex))[0]
+                    if sizeOfItemId == 0:
+                        break
+
+                    itemIdDataIndex = sizeOfItemIdIndex + 2
+                    data = contents[itemIdDataIndex:(itemIdDataIndex + sizeOfItemId - 2)]
+                    self.itemIdDatas.append(data)
+
+                    sizeOfItemIdIndex += sizeOfItemId
+
+    def pack(self):
+        pass # TODO
+
+
+
 
 
 # SUB-STRUCTURES CLASSES END
@@ -219,8 +247,10 @@ class LNK:
             with open(lnkFilePath, "rb") as lnkFile:
                 contents = lnkFile.read()
                 self.shellLinkHeader = _ShellLinkHeader(contents)
+                self.linkTargetIdList = _LinkTargetIDList(self.shellLinkHeader.HeaderSize, contents)
         else:
             self.shellLinkHeader = _ShellLinkHeader()
+            self.linkTargetIdList = _LinkTargetIDList(0, None)
 
     # Pack into LNK
     def pack(self):
