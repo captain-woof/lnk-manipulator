@@ -44,9 +44,9 @@ def getBit(contents: bytes, bitIndex = 0):
     byteIndex = math.floor(bitIndex / 8)
     byteExtracted = contents[byteIndex]
 
-    bitValue = byteExtracted << (bitIndex % 8)
-    bitValue = bitValue >> 7
-    bitValue = bitValue << 7
+    bitValue = (byteExtracted << (bitIndex % 8)) & 0xFF
+    bitValue = (bitValue >> 7) & 0xFF
+    bitValue = (bitValue << 7) & 0xFF
     
     return bitValue != 0
 
@@ -91,11 +91,11 @@ def packBit(contents: bytes, bitIndex = 0, value: bool = False):
     byteNew = 0
     bitIndexInByte = bitIndex % 8
     if value:
-        mask = (0x01 << 7) >> bitIndexInByte
+        mask = ((0x01 << 7) >> bitIndexInByte) & 0xFF
         byteNew = byteExtracted | mask
     else:
-        mask1 = 0xFF >> (bitIndexInByte + 1)
-        mask2 = 0xFF << (8 - bitIndexInByte)
+        mask1 = (0xFF >> (bitIndexInByte + 1)) & 0xFF
+        mask2 = (0xFF << (8 - bitIndexInByte)) & 0xFF
         mask = mask1 | mask2
         byteNew = byteExtracted & mask
 
@@ -132,7 +132,7 @@ def utcSecondsToSystemTime(utcSeconds: int):
 class _ShellLinkHeader:
     # Data
     HeaderSize = 0x4C # 4 bytes; 0x4C
-    LinkCLSID = b"\x01\x14\x02\x00\x00\x00\x00\x00\xC0\x00\x00\x00\x00\x00\x00\x0F" # 16 bytes; 00021401-0000-0000-C000-000000000046 OR 00021401-0000-0000-C000-00000000000F
+    LinkCLSID = b"\x01\x14\x02\x00\x00\x00\x00\x00\xC0\x00\x00\x00\x00\x00\x00\x46" # 16 bytes; 00021401-0000-0000-C000-000000000046 OR 00021401-0000-0000-C000-00000000000F
     HasLinkTargetIDList = False # 1 bit; The shell link is saved with an item ID list (IDList). If this bit is set, a LinkTargetIDList structure (section 2.2) MUST follow the ShellLinkHeader. If this bit is not set, this structure MUST NOT be present.
     HasLinkInfo = False # The shell link is saved with link information. If this bit is set, a LinkInfo structure (section 2.3) MUST be present. If this bit is not set, this structure MUST NOT be present.
     HasName = False # 1 bit; The shell link is saved with a name string. If this bit is set, a NAME_STRING StringData structure (section 2.4) MUST be present. If this bit is not set, this structure MUST NOT be present.
@@ -356,6 +356,7 @@ class _LinkTargetIDList:
 
     @property
     def sizeOfIdList(self):
+        size = 0
         for itemIdData in self.itemIdDatas:
             size += 2 + len(itemIdData)
         size += 2 # TerminalID
@@ -428,17 +429,16 @@ class _LinkInfo:
 
     def __init__(self, offset: int, contents: bytes):
         if offset != 0 and contents != None:
-            linkInfoOffset = offset + 2
-            self.LinkInfoSize = getUint(contents, linkInfoOffset)
+            self.LinkInfoSize = getUint(contents, offset)
 
             if self.LinkInfoSize != 0:
                 # LinkInfoHeaderSize
-                self.LinkInfoHeaderSize = getUint(contents, linkInfoOffset + 4)
+                self.LinkInfoHeaderSize = getUint(contents, offset + 4)
                 if self.LinkInfoHeaderSize >= 0x24:
                     self.OffsetsToOptionalFieldsPresent = True
 
                 # LinkInfoFlags
-                self.LinkInfoFlags = getUint(contents, linkInfoOffset + 8)
+                self.LinkInfoFlags = getUint(contents, offset + 8)
                 if self.LinkInfoFlags != 0:
                     if self.LinkInfoFlags == 1:
                         self.VolumeIDAndLocalBasePathPresent = True
@@ -449,44 +449,44 @@ class _LinkInfo:
                         self.CommonNetworkRelativeLinkAndPathSuffixPresent = True
 
                 # VolumeIDOffset
-                self.VolumeIDOffset = getUint(contents, linkInfoOffset + 12)
+                self.VolumeIDOffset = getUint(contents, offset + 12)
 
                 # LocalBasePathOffset
-                self.LocalBasePathOffset = getUint(contents, linkInfoOffset + 16)
+                self.LocalBasePathOffset = getUint(contents, offset + 16)
 
                 # CommonNetworkRelativeLinkOffset
-                self.CommonNetworkRelativeLinkOffset = getUint(contents, linkInfoOffset + 20)
+                self.CommonNetworkRelativeLinkOffset = getUint(contents, offset + 20)
 
                 # CommonPathSuffixOffset
-                self.CommonPathSuffixOffset = getUint(contents, linkInfoOffset + 24)
+                self.CommonPathSuffixOffset = getUint(contents, offset + 24)
 
                 # LocalBasePathOffsetUnicode
                 if self.LinkInfoHeaderSize >= 0x24:
-                    self.LocalBasePathOffsetUnicode = getUint(contents, linkInfoOffset + 28)
+                    self.LocalBasePathOffsetUnicode = getUint(contents, offset + 28)
 
                 # CommonPathSuffixOffsetUnicode
                 if self.LinkInfoHeaderSize >= 0x24:
-                    self.CommonPathSuffixOffsetUnicode = getUint(contents, linkInfoOffset + 32)
+                    self.CommonPathSuffixOffsetUnicode = getUint(contents, offset + 32)
 
                 # VolumeID
                 if self.VolumeIDAndLocalBasePathPresent and self.VolumeIDOffset != 0:
-                    self.VolumeIdSize = getUint(contents, linkInfoOffset + self.VolumeIDOffset)
-                    self.VolumeIdDriveType = getUint(contents, linkInfoOffset + self.VolumeIDOffset + 4)
-                    self.VolumeIdDriveSerialNumber = getUint(contents, linkInfoOffset + self.VolumeIDOffset + 8)
-                    self.VolumeIdLabelOffset = getUint(contents, linkInfoOffset + self.VolumeIDOffset + 12)
+                    self.VolumeIdSize = getUint(contents, offset + self.VolumeIDOffset)
+                    self.VolumeIdDriveType = getUint(contents, offset + self.VolumeIDOffset + 4)
+                    self.VolumeIdDriveSerialNumber = getUint(contents, offset + self.VolumeIDOffset + 8)
+                    self.VolumeIdLabelOffset = getUint(contents, offset + self.VolumeIDOffset + 12)
 
                     if self.VolumeIdLabelOffset == 0x14:
-                        self.VolumeIdLabelOffsetUnicode = getUint(contents, linkInfoOffset + self.VolumeIDOffset + 16)
-                    self.VolumeIdData = contents[linkInfoOffset + self.VolumeIDOffset + 20:linkInfoOffset + self.VolumeIDOffset + 20 + self.VolumeIdSize]
+                        self.VolumeIdLabelOffsetUnicode = getUint(contents, offset + self.VolumeIDOffset + 16)
+                    self.VolumeIdData = contents[offset + self.VolumeIDOffset + 20:offset + self.VolumeIDOffset + 20 + self.VolumeIdSize]
 
                 # LocalBasePath
                 if self.VolumeIDAndLocalBasePathPresent and self.LocalBasePathOffset != 0:
-                    self.LocalBasePath = getStringUtf8(contents, linkInfoOffset + self.LocalBasePathOffset)
+                    self.LocalBasePath = getStringUtf8(contents, offset + self.LocalBasePathOffset)
 
                 # CommonNetworkRelativeLink
                 if self.CommonNetworkRelativeLinkAndPathSuffixPresent and self.CommonNetworkRelativeLinkOffset != 0:
-                    self.CommonNetworkRelativeLinkSize = getUint(contents, linkInfoOffset + self.CommonNetworkRelativeLinkOffset)
-                    self.CommonNetworkRelativeLinkFlags = getUint(contents, linkInfoOffset + self.CommonNetworkRelativeLinkOffset + 4)
+                    self.CommonNetworkRelativeLinkSize = getUint(contents, offset + self.CommonNetworkRelativeLinkOffset)
+                    self.CommonNetworkRelativeLinkFlags = getUint(contents, offset + self.CommonNetworkRelativeLinkOffset + 4)
 
                     if self.CommonNetworkRelativeLinkFlags != 0:
                         if self.CommonNetworkRelativeLinkFlags == 1:
@@ -497,35 +497,35 @@ class _LinkInfo:
                             self.CommonNetworkRelativeLinkValidDevice = True
                             self.CommonNetworkRelativeLinkValidNetType = True
 
-                    self.NetNameOffset = getUint(contents, linkInfoOffset + self.CommonNetworkRelativeLinkOffset + 8)
+                    self.NetNameOffset = getUint(contents, offset + self.CommonNetworkRelativeLinkOffset + 8)
                     if self.NetNameOffset != 0:
                         if self.NetNameOffset > 0x14:
-                            self.NetNameOffsetUnicode = getUint(contents, linkInfoOffset + self.CommonNetworkRelativeLinkOffset + 20)
-                            self.NetNameUnicode = getStringUtf16Le(contents, linkInfoOffset + self.CommonNetworkRelativeLinkOffset + self.NetNameOffsetUnicode)
+                            self.NetNameOffsetUnicode = getUint(contents, offset + self.CommonNetworkRelativeLinkOffset + 20)
+                            self.NetNameUnicode = getStringUtf16Le(contents, offset + self.CommonNetworkRelativeLinkOffset + self.NetNameOffsetUnicode)
                         else:
-                            self.NetName = getStringUtf8(contents, linkInfoOffset + self.CommonNetworkRelativeLinkOffset + self.NetNameOffset)
+                            self.NetName = getStringUtf8(contents, offset + self.CommonNetworkRelativeLinkOffset + self.NetNameOffset)
 
-                    self.DeviceNameOffset = getUint(contents, linkInfoOffset + self.CommonNetworkRelativeLinkOffset + 12)
+                    self.DeviceNameOffset = getUint(contents, offset + self.CommonNetworkRelativeLinkOffset + 12)
                     if self.CommonNetworkRelativeLinkValidDevice and self.DeviceNameOffset != 0:
                         if self.NetNameOffset > 0x14:
-                            self.DeviceNameOffsetUnicode = getUint(contents, linkInfoOffset + self.CommonNetworkRelativeLinkOffset + 24)
-                            self.DeviceNameUnicode = getStringUtf16Le(contents, linkInfoOffset + self.CommonNetworkRelativeLinkOffset + self.DeviceNameOffsetUnicode)
+                            self.DeviceNameOffsetUnicode = getUint(contents, offset + self.CommonNetworkRelativeLinkOffset + 24)
+                            self.DeviceNameUnicode = getStringUtf16Le(contents, offset + self.CommonNetworkRelativeLinkOffset + self.DeviceNameOffsetUnicode)
                         else:
-                            self.DeviceName = getStringUtf8(contents, linkInfoOffset + self.CommonNetworkRelativeLinkOffset + self.DeviceNameOffset)
+                            self.DeviceName = getStringUtf8(contents, offset + self.CommonNetworkRelativeLinkOffset + self.DeviceNameOffset)
 
                     if self.CommonNetworkRelativeLinkValidNetType:
-                        self.NetworkProviderType = getUint(contents, linkInfoOffset + self.CommonNetworkRelativeLinkOffset + 16)
+                        self.NetworkProviderType = getUint(contents, offset + self.CommonNetworkRelativeLinkOffset + 16)
 
                 # CommonPathSuffix
-                self.CommonPathSuffix = getStringUtf8(contents, linkInfoOffset + self.CommonPathSuffixOffset)
+                self.CommonPathSuffix = getStringUtf8(contents, offset + self.CommonPathSuffixOffset)
 
                 # LocalBasePathUnicode
                 if self.VolumeIDAndLocalBasePathPresent and self.LinkInfoHeaderSize >= 0x24 and self.LocalBasePathOffsetUnicode != 0:
-                    self.LocalBasePathUnicode = getStringUtf16Le(contents, linkInfoOffset + self.LocalBasePathOffsetUnicode)
+                    self.LocalBasePathUnicode = getStringUtf16Le(contents, offset + self.LocalBasePathOffsetUnicode)
 
                 # CommonPathSuffixUnicode
                 if self.LinkInfoHeaderSize >= 0x24 and self.CommonPathSuffixOffsetUnicode != 0:
-                    self.CommonPathSuffixUnicode = getStringUtf16Le(contents, linkInfoOffset + self.CommonPathSuffixOffsetUnicode)
+                    self.CommonPathSuffixUnicode = getStringUtf16Le(contents, offset + self.CommonPathSuffixOffsetUnicode)
 
     def pack(self):
         # Pack all the required variable data individually
@@ -553,8 +553,8 @@ class _LinkInfo:
             contentsVolumeId += packUint(20 + len(self.VolumeIdData) + 1)
 
             ### Data
-            contentsVolumeId += packStringUtf8(self.VolumeIdData) + b"\x00"
-            contentsVolumeId += packStringUtf16Le(self.VolumeIdData) + b"\x00\x00"
+            contentsVolumeId += self.VolumeIdData + (b"\x00" if self.VolumeIdData[-1] != b"\x00" else b"")
+            contentsVolumeId += self.VolumeIdData + (b"\x00\x00" if (self.VolumeIdData[-1] != b"\x00" or self.VolumeIdData[-2] != b"\x00") else b"")
 
         ## LinkInfoFlags
         contentsLinkInfoFlags = b""
@@ -874,7 +874,11 @@ class LNK:
 
 ########### MAIN
 if __name__ == "__main__":
-    lnk = LNK("calc.lnk")
+    lnk = LNK("cmd.lnk")
+
+
+    #lnk.shellLinkHeader.HasLinkTargetIDList = False
+    #lnk.shellLinkHeader.HasLinkInfo = False
 
     packed = lnk.packAndSave("test.lnk")
 
