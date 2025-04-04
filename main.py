@@ -65,6 +65,60 @@ def systemTimeToUtcSeconds(systemTime: bytes):
     intervalsSeconds = (intervals * 100) / (math.pow(10, 9))
     intervalsSecondsCorrected = intervalsSeconds - ((1970 - 1601) * 31556926)
     return intervalsSecondsCorrected
+
+def packUint(number: int = 0):
+    return struct.pack("<I", number)
+
+def packInt(number: int = 0):
+    return struct.pack("<i", number)
+
+def packUshort(number: int = 0):
+    return struct.pack("<H", number)
+
+def packShort(number: int = 0):
+    return struct.pack("<h", number)
+
+def packStringUtf8(string: str):
+    return string.encode("utf-8")
+
+def packStringUtf16Le(string: str):
+    return string.encode("utf-16le")
+
+def packBit(contents: bytes, bitIndex = 0, value: bool = False):
+    byteIndex = math.floor(bitIndex / 8)
+    byteExtracted = contents[byteIndex]
+
+    byteNew = 0
+    bitIndexInByte = bitIndex % 8
+    if value:
+        mask = (0x01 << 7) >> bitIndexInByte
+        byteNew = byteExtracted | mask
+    else:
+        mask1 = 0xFF >> (bitIndexInByte + 1)
+        mask2 = 0xFF << (8 - bitIndexInByte)
+        mask = mask1 | mask2
+        byteNew = byteExtracted & mask
+
+    contentsPre = contents[0:byteIndex]
+    contentsPost = contents[byteIndex + 1:]
+
+    return contentsPre + int.to_bytes(byteNew) + contentsPost
+
+def utcSecondsToSystemTime(utcSeconds: int):
+    """
+    The FILETIME structure is a 64-bit value that represents the number of 100-nanosecond intervals that have elapsed since January 1, 1601, Coordinated Universal Time (UTC).
+
+     typedef struct _FILETIME {
+       DWORD dwLowDateTime;
+       DWORD dwHighDateTime;
+     } FILETIME,
+      *PFILETIME,
+      *LPFILETIME;
+    """
+    intervalsSeconds = utcSeconds +  ((1970 - 1601) * 31556926)
+    intervals = int((intervalsSeconds * (math.pow(10, 9))) / 100)
+    intervalsPacked = struct.pack("<Q", intervals)
+    return intervalsPacked
     
 
 # HELPER METHODS END
@@ -77,8 +131,8 @@ def systemTimeToUtcSeconds(systemTime: bytes):
 
 class _ShellLinkHeader:
     # Data
-    HeaderSize = 0 # 4 bytes; 0x4C
-    LinkCLSID = b"" # 16 bytes; 00021401-0000-0000-C000-000000000046 OR 00021401-0000-0000-C000-00000000000F
+    HeaderSize = 0x4C # 4 bytes; 0x4C
+    LinkCLSID = b"\x01\x14\x02\x00\x00\x00\x00\x00\xC0\x00\x00\x00\x00\x00\x00\x0F" # 16 bytes; 00021401-0000-0000-C000-000000000046 OR 00021401-0000-0000-C000-00000000000F
     HasLinkTargetIDList = False # 1 bit; The shell link is saved with an item ID list (IDList). If this bit is set, a LinkTargetIDList structure (section 2.2) MUST follow the ShellLinkHeader. If this bit is not set, this structure MUST NOT be present.
     HasLinkInfo = False # The shell link is saved with link information. If this bit is set, a LinkInfo structure (section 2.3) MUST be present. If this bit is not set, this structure MUST NOT be present.
     HasName = False # 1 bit; The shell link is saved with a name string. If this bit is set, a NAME_STRING StringData structure (section 2.4) MUST be present. If this bit is not set, this structure MUST NOT be present.
@@ -117,13 +171,13 @@ class _ShellLinkHeader:
     FILE_ATTRIBUTE_OFFLINE = False # 1 bit; The data of the file is not immediately available.
     FILE_ATTRIBUTE_NOT_CONTENT_INDEXED = False # 1 bit; The contents of the file need to be indexed.
     FILE_ATTRIBUTE_ENCRYPTED = False # 1 bit; The file or directory is encrypted. For a file, this means that all data in the file is encrypted. For a directory, this means that encryption is the default for newly created files and subdirectories.
-    CreationTime = 0
-    AccessTime = 0
-    WriteTime = 0
-    FileSize = 0
-    IconIndex = 0
-    ShowCommand = 0
-    HotkeyFlags = [None, None]
+    CreationTime = 0 # UTC seconds
+    AccessTime = 0 # UTC seconds
+    WriteTime = 0 # UTC seconds
+    FileSize = 0 # Size, in bytes, of the link target. If the link target file is larger than 0xFFFFFFFF, this value specifies the least significant 32 bits of the link target file size.
+    IconIndex = 0 # Index of an icon within a given icon location
+    ShowCommand = 1 # 1=Normal, 3=Maximized, 7=Minimized
+    HotkeyFlags = [0, 0] # low byte, high byte; https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-shllink/8cd21240-1b5d-43e6-adc4-38cf14e30cea
 
     def __init__(self, contents: bytes):
         # HeaderSize; 4 bytes
@@ -201,32 +255,93 @@ class _ShellLinkHeader:
         self.ShowCommand = getUint(showCommand, 0)
 
         # HotKeyFlags; 2 bytes
-        hotkeyFlags = contents[64:66]
-        hotkeyFlagsLow = hotkeyFlags[0]
-        hotkeyFlagsHigh = hotkeyFlags[1]
-
-        if hotkeyFlagsLow != 0:
-            if hotkeyFlagsLow >= 0x30 and hotkeyFlagsLow <= 0x39:
-                self.HotkeyFlags[1] = f"{hotkeyFlagsLow - 0x30}"
-            elif hotkeyFlagsLow >= 0x41 and hotkeyFlagsLow <= 0x5A:
-                self.HotkeyFlags[1] = chr(hotkeyFlagsLow)
-            elif hotkeyFlagsLow >= 0x70 and hotkeyFlagsLow <= 0x87:
-                self.HotkeyFlags[1] = f"F{hotkeyFlagsLow - 0x70 + 1}"
-            elif hotkeyFlagsLow == 0x90:
-                self.HotkeyFlags[1] = "NUM LOCK"
-            elif hotkeyFlagsLow == 0x91:
-                self.HotkeyFlags[1] = "SCROLL LOCK"
-
-        if hotkeyFlagsHigh != 0:
-            if (hotkeyFlagsHigh & 0x01) != 0:
-                self.HotkeyFlags[0] = "SHIFT" if self.HotkeyFlags[0] is None else f"{self.HotkeyFlags[0]}+SHIFT"
-            if (hotkeyFlagsHigh & 0x02) != 0:
-                self.HotkeyFlags[0] = "CTRL" if self.HotkeyFlags[0] is None else f"{self.HotkeyFlags[0]}+CTRL"
-            if (hotkeyFlagsHigh & 0x04) != 0:
-                self.HotkeyFlags[0] = "ALT" if self.HotkeyFlags[0] is None else f"{self.HotkeyFlags[0]}+ALT"
+        self.HotkeyFlags[0] = contents[64]
+        self.HotkeyFlags[1] = contents[65]
 
     def pack(self):
-        pass # TODO
+        contents = b""
+
+        # HeaderSize; 4 bytes
+        contents += packUint(self.HeaderSize)
+
+        # LinkCLSID; 16 bytes
+        contents += self.LinkCLSID
+
+        # LinkFlags; 4 bytes
+        linkFlags = bytes(4)
+        linkFlags = packBit(linkFlags, 0, self.HasLinkTargetIDList)
+        linkFlags = packBit(linkFlags, 1, self.HasLinkInfo)
+        linkFlags = packBit(linkFlags, 2, self.HasName)
+        linkFlags = packBit(linkFlags, 3, self.HasRelativePath)
+        linkFlags = packBit(linkFlags, 4, self.HasWorkingDir)
+        linkFlags = packBit(linkFlags, 5, self.HasArguments)
+        linkFlags = packBit(linkFlags, 6, self.HasIconLocation)
+        linkFlags = packBit(linkFlags, 7, self.IsUnicode)
+        linkFlags = packBit(linkFlags, 8, self.ForceNoLinkInfo)
+        linkFlags = packBit(linkFlags, 9, self.HasExpString)
+        linkFlags = packBit(linkFlags, 10, self.RunInSeparateProcess)
+        linkFlags = packBit(linkFlags, 12, self.HasDarwinID)
+        linkFlags = packBit(linkFlags, 13, self.RunAsUser)
+        linkFlags = packBit(linkFlags, 14, self.HasExpIcon)
+        linkFlags = packBit(linkFlags, 15, self.NoPidlAlias)
+        linkFlags = packBit(linkFlags, 17, self.RunWithShimLayer)
+        linkFlags = packBit(linkFlags, 18, self.ForceNoLinkTrack)
+        linkFlags = packBit(linkFlags, 19, self.EnableTargetMetadata)
+        linkFlags = packBit(linkFlags, 20, self.DisableLinkPathTracking)
+        linkFlags = packBit(linkFlags, 21, self.DisableKnownFolderTracking)
+        linkFlags = packBit(linkFlags, 22, self.DisableKnownFolderAlias)
+        linkFlags = packBit(linkFlags, 23, self.AllowLinkToLink)
+        linkFlags = packBit(linkFlags, 24, self.UnaliasOnSave)
+        linkFlags = packBit(linkFlags, 25, self.PreferEnvironmentPath)
+        linkFlags = packBit(linkFlags, 26, self.KeepLocalIDListForUNCTarget)
+        contents += linkFlags
+
+        # File attributes; 4 bytes
+        fileAttributes = bytes(4)
+        fileAttributes = packBit(fileAttributes, 0, self.FILE_ATTRIBUTE_READONLY)
+        fileAttributes = packBit(fileAttributes, 1, self.FILE_ATTRIBUTE_HIDDEN)
+        fileAttributes = packBit(fileAttributes, 2, self.FILE_ATTRIBUTE_SYSTEM)
+        fileAttributes = packBit(fileAttributes, 4, self.FILE_ATTRIBUTE_DIRECTORY)
+        fileAttributes = packBit(fileAttributes, 5, self.FILE_ATTRIBUTE_ARCHIVE)
+        fileAttributes = packBit(fileAttributes, 7, self.FILE_ATTRIBUTE_NORMAL)
+        fileAttributes = packBit(fileAttributes, 8, self.FILE_ATTRIBUTE_TEMPORARY)
+        fileAttributes = packBit(fileAttributes, 9, self.FILE_ATTRIBUTE_SPARSE_FILE)
+        fileAttributes = packBit(fileAttributes, 10, self.FILE_ATTRIBUTE_REPARSE_POINT)
+        fileAttributes = packBit(fileAttributes, 11, self.FILE_ATTRIBUTE_COMPRESSED)
+        fileAttributes = packBit(fileAttributes, 12, self.FILE_ATTRIBUTE_OFFLINE)
+        fileAttributes = packBit(fileAttributes, 13, self.FILE_ATTRIBUTE_NOT_CONTENT_INDEXED)
+        fileAttributes = packBit(fileAttributes, 14, self.FILE_ATTRIBUTE_ENCRYPTED)
+        contents += fileAttributes
+        
+        # CreationTime; 8 bytes
+        contents += utcSecondsToSystemTime(self.CreationTime)
+
+        # AccessTime; 8 bytes
+        contents += utcSecondsToSystemTime(self.AccessTime)
+
+        # WriteTime; 8 bytes
+        contents += utcSecondsToSystemTime(self.WriteTime)
+
+        # FileSize; 4 
+        contents += packUint(self.FileSize)
+
+        # IconIndex; 4 bytes
+        contents += packInt(self.IconIndex)
+
+        # ShowCommand; 4 bytes
+        contents += packUint(self.ShowCommand)
+
+        # HotKeyFlags; 2 bytes
+        contents += int.to_bytes(self.HotkeyFlags[0]) + int.to_bytes(self.HotkeyFlags[1])
+
+        # Reserved1 + Reserved2 + Reserved3
+        reserved = bytes(2 + 4 + 4)
+        contents += reserved
+
+        # Return result
+        return contents
+
+
 
 class _LinkTargetIDList:
     sizeOfIdList: int
@@ -471,7 +586,6 @@ SHELL_LINK = SHELL_LINK_HEADER [LINKTARGET_IDLIST] [LINKINFO]
 """
 class LNK:
     # Data
-    lnkFilePath: str = None
     shellLinkHeader: _ShellLinkHeader = None
     linkTargetIdList: _LinkTargetIDList = None
     linkInfo: _LinkInfo = None
@@ -482,32 +596,41 @@ class LNK:
 
     # Constructor
     def __init__(self, lnkFilePath: str = None):
-        self.lnkFilePath = lnkFilePath
         if lnkFilePath != None:
+            nextOffset = 0
             with open(lnkFilePath, "rb") as lnkFile:
                 contents = lnkFile.read()
                 self.shellLinkHeader = _ShellLinkHeader(
                     contents=contents
                     )
-
-                self.linkTargetIdList = _LinkTargetIDList(
-                    offset = self.shellLinkHeader.HeaderSize,
-                    contents = contents
-                    )
+                nextOffset += self.shellLinkHeader.HeaderSize
+                
+                if self.shellLinkHeader.HasLinkTargetIDList:
+                    self.linkTargetIdList = _LinkTargetIDList(
+                        offset = nextOffset,
+                        contents = contents
+                        )
+                    nextOffset += self.linkTargetIdList.sizeOfIdList
+                else:
+                    self.linkTargetIdList = _LinkTargetIDList(offset = 0, contents = None)
 
                 if self.shellLinkHeader.HasLinkInfo:
                     self.linkInfo = _LinkInfo(
-                        offset = self.linkTargetIdList.sizeOfIdList + self.shellLinkHeader.HeaderSize, 
+                        offset = nextOffset,
                         contents = contents
                         )
+                    nextOffset += self.linkInfo.LinkInfoSize
+                else:
+                    self.linkInfo = _LinkInfo(offset = 0, contents = None)
 
                 self.stringData = _StringData(
                     shellLinkHeader = self.shellLinkHeader,
-                    offset = self.linkTargetIdList.sizeOfIdList + self.shellLinkHeader.HeaderSize + self.linkInfo.LinkInfoSize,
+                    offset = nextOffset,
                     contents = contents
                     )
+                nextOffset += self.stringData.sizeOfStringData
                 
-                # self.extraData TODO
+                # self.extraData TODO (not required; shortcut works without it)
 
         else:
             self.shellLinkHeader = _ShellLinkHeader()
@@ -517,8 +640,17 @@ class LNK:
 
     # Pack into LNK
     def pack(self):
-        pass # TODO
+        shellLinkHeaderContents = self.shellLinkHeader.pack()
 
+        contents = shellLinkHeaderContents # +
+
+        return contents
+    
+    # Pack into LNK and write out the file
+    def packAndSave(self, filePath: str):
+        contents = self.pack()
+        with open(filePath, "wb") as fileToWrite:
+            fileToWrite.write(contents)
 
     # FUNCTIONS END
     # ----------------------------------------------------------------------------------
