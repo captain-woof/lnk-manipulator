@@ -344,14 +344,28 @@ class _ShellLinkHeader:
 
 
 class _LinkTargetIDList:
-    sizeOfIdList: int
     itemIdDatas: list[bytes] = []
+
+    @property
+    def totalSize(self):
+        size = 2 # IDListSize
+        for itemIdData in self.itemIdDatas:
+            size += 2 + len(itemIdData)
+        size += 2 # TerminalID
+        return size
+
+    @property
+    def sizeOfIdList(self):
+        for itemIdData in self.itemIdDatas:
+            size += 2 + len(itemIdData)
+        size += 2 # TerminalID
+        return size
 
     def __init__(self, offset: int, contents: bytes):
         if offset != 0 and contents != None:
-            self.sizeOfIdList = getUshort(contents, offset)
+            sizeOfIdList = getUshort(contents, offset)
 
-            if self.sizeOfIdList != 0:
+            if sizeOfIdList != 0:
                 sizeOfItemIdIndex = offset + 2
                 while True:
                     sizeOfItemId = getUshort(contents, sizeOfItemIdIndex)
@@ -365,7 +379,20 @@ class _LinkTargetIDList:
                     sizeOfItemIdIndex += sizeOfItemId
 
     def pack(self):
-        pass # TODO
+        contents = b""
+
+        # IDListSize
+        contents += packUshort(self.sizeOfIdList)
+
+        # IDList -> ItemIDList
+        for itemIdData in self.itemIdDatas:
+            contents += packUshort(len(itemIdData))
+            contents += itemIdData 
+
+        # IDList -> TerminalID
+        contents += b"\x00\x00"
+
+        return contents
 
 
 class _LinkInfo:
@@ -464,7 +491,7 @@ class _LinkInfo:
                     if self.CommonNetworkRelativeLinkFlags != 0:
                         if self.CommonNetworkRelativeLinkFlags == 1:
                             self.CommonNetworkRelativeLinkValidDevice = True
-                        elif self.CommonNetworkRelativeLinkFlags == 1:
+                        elif self.CommonNetworkRelativeLinkFlags == 2:
                             self.CommonNetworkRelativeLinkValidNetType = True
                         else:
                             self.CommonNetworkRelativeLinkValidDevice = True
@@ -501,8 +528,163 @@ class _LinkInfo:
                     self.CommonPathSuffixUnicode = getStringUtf16Le(contents, linkInfoOffset + self.CommonPathSuffixOffsetUnicode)
 
     def pack(self):
-        pass # TODO
+        # Pack all the required variable data individually
 
+        ## VolumeID
+        contentsVolumeId = b""
+        if self.VolumeIDAndLocalBasePathPresent:
+            ### VolumeIDSize
+            contentsVolumeId += packUint(
+                (5 * 4)
+                + len(self.VolumeIdData) + 1
+                + ((len(self.VolumeIdData) + 1) * 2)
+            )
+
+            ### DriveType
+            contentsVolumeId += packUint(self.VolumeIdDriveType)
+
+            ### DriveSerialNumber
+            contentsVolumeId += packUint(self.VolumeIdDriveSerialNumber)
+            
+            ### VolumeLabelOffset
+            contentsVolumeId += packUint(20)
+
+            ### VolumeLabelOffsetUnicode
+            contentsVolumeId += packUint(20 + len(self.VolumeIdData) + 1)
+
+            ### Data
+            contentsVolumeId += packStringUtf8(self.VolumeIdData) + b"\x00"
+            contentsVolumeId += packStringUtf16Le(self.VolumeIdData) + b"\x00\x00"
+
+        ## LinkInfoFlags
+        contentsLinkInfoFlags = b""
+        if self.VolumeIDAndLocalBasePathPresent:
+            contentsLinkInfoFlags = packUint(1)
+        elif self.CommonNetworkRelativeLinkAndPathSuffixPresent:
+            contentsLinkInfoFlags = packUint(2)
+        elif self.VolumeIDAndLocalBasePathPresent and self.CommonNetworkRelativeLinkAndPathSuffixPresent:
+            contentsLinkInfoFlags = packUint(3)
+        else:
+            contentsLinkInfoFlags = packUint(0)
+
+        ## LocalBasePath
+        contentsLocalBasePath = packStringUtf8(self.LocalBasePath)
+
+        ## CommonPathSuffix
+        contentsCommonPathSuffix = packStringUtf8(self.CommonPathSuffix)
+
+        ## LocalBasePathUnicode
+        contentsLocalBasePathUnicode = packStringUtf16Le(self.LocalBasePathUnicode)
+
+        ## CommonPathSuffixUnicode
+        contentsCommonPathSuffixUnicode = packStringUtf16Le(self.CommonPathSuffixUnicode)
+
+        ## CommonNetworkRelativeLink
+        contentsCommonNetworkRelativeLinkFlags = packUint(0)
+        if self.CommonNetworkRelativeLinkValidDevice and not self.CommonNetworkRelativeLinkValidNetType:
+            contentsCommonNetworkRelativeLinkFlags = packUint(1)
+        elif not self.CommonNetworkRelativeLinkValidDevice and self.CommonNetworkRelativeLinkValidNetType:
+            contentsCommonNetworkRelativeLinkFlags = packUint(2)
+        elif self.CommonNetworkRelativeLinkValidDevice and self.CommonNetworkRelativeLinkValidNetType:
+            contentsCommonNetworkRelativeLinkFlags = packUint(3)
+        contentsNetName = packStringUtf8(self.NetName)
+        contentsNetNameUnicode = packStringUtf16Le(self.NetNameUnicode)
+        contentsDeviceName = packStringUtf8(self.DeviceName)
+        contentsDeviceNameUnicode = packStringUtf16Le(self.DeviceNameUnicode)
+        contentsNetworkProviderType = packUint(self.NetworkProviderType)
+        
+        contentsCommonNetworkRelativeLink = b""
+
+        ### CommonNetworkRelativeLinkSize
+        contentsCommonNetworkRelativeLink += packUint(
+            (7 * 4)
+            + len(contentsNetName) + 1
+            + 2 * (len(contentsNetNameUnicode) + 1)
+            + len(contentsDeviceName)
+            + 2 * (len(contentsDeviceNameUnicode) + 1)
+            )
+        ### CommonNetworkRelativeLinkFlags
+        contentsCommonNetworkRelativeLink += contentsCommonNetworkRelativeLinkFlags
+        ### NetNameOffset
+        contentsCommonNetworkRelativeLink += packUint(28)
+        ### DeviceNameOffset
+        contentsCommonNetworkRelativeLink += packUint(28 + len(contentsNetName) + 1)
+        ### NetworkProviderType
+        contentsCommonNetworkRelativeLink += contentsNetworkProviderType
+        ### NetNameOffsetUnicode
+        contentsCommonNetworkRelativeLink += packUint(28 + len(contentsNetName) + 1 + len(contentsDeviceName) + 1)
+        ### DeviceNameOffsetUnicode
+        contentsCommonNetworkRelativeLink += packUint(28 + len(contentsNetName) + 1 + len(contentsDeviceName) + 1 + ((2 * len(contentsNetNameUnicode)) + 2))
+        ### NetName
+        contentsCommonNetworkRelativeLink += contentsNetName + b"\x00"
+        ### DeviceName
+        contentsCommonNetworkRelativeLink += contentsDeviceName + b"\x00"
+        ### NetNameUnicode
+        contentsCommonNetworkRelativeLink += contentsNetNameUnicode + b"\x00\x00"
+        ### DeviceNameUnicode
+        contentsCommonNetworkRelativeLink += contentsDeviceNameUnicode + b"\x00\x00"
+
+        # Pack all data, combining individual packings
+        contents = b""
+
+        ## LinkInfoSize
+        contents += packUint(
+            (9 * 4)
+            + len(contentsVolumeId)
+            + len(contentsLocalBasePath)
+            + len(contentsCommonNetworkRelativeLink)
+            + len(contentsCommonPathSuffix)
+            + len(contentsLocalBasePathUnicode)
+            + len(contentsCommonPathSuffixUnicode)
+        )
+
+        ## LinkInfoHeaderSize
+        contents += packUint(
+            (9 * 4)
+        )
+
+        ## LinkInfoFlags
+        contents += contentsLinkInfoFlags
+
+        ## VolumeIDOffset
+        contents += packUint(36)
+
+        ## LocalBasePathOffset
+        contents += packUint(36 + len(contentsVolumeId))
+
+        ## CommonNetworkRelativeLinkOffset
+        contents += packUint(36 + len(contentsVolumeId) + len(contentsLocalBasePath))
+
+        ## CommonPathSuffixOffset
+        contents += packUint(36 + len(contentsVolumeId) + len(contentsLocalBasePath) + len(contentsCommonNetworkRelativeLink))
+
+        ## LocalBasePathOffsetUnicode
+        contents += packUint(36 + len(contentsVolumeId) + len(contentsLocalBasePath) + len(contentsCommonNetworkRelativeLink) + len(contentsCommonPathSuffix))
+
+        ## CommonPathSuffixOffsetUnicode
+        contents += packUint(36 + len(contentsVolumeId) + len(contentsLocalBasePath) + len(contentsCommonNetworkRelativeLink) + len(contentsCommonPathSuffix) + len(contentsLocalBasePathUnicode))
+
+        ## VolumeID
+        contents += contentsVolumeId
+
+        ## LocalBasePath
+        contents += contentsLocalBasePath
+
+        ## CommonNetworkRelativeLink
+        contents += contentsCommonNetworkRelativeLink
+
+        ## CommonPathSuffix
+        contents += contentsCommonPathSuffix
+
+        ## LocalBasePathUnicode
+        contents += contentsLocalBasePathUnicode
+
+        ## CommonPathSuffixUnicode
+        contents += contentsCommonPathSuffixUnicode
+
+        # Return final packed data
+        return contents 
+    
 
 class _StringData:
     NAME_STRING: str = ""
@@ -610,7 +792,7 @@ class LNK:
                         offset = nextOffset,
                         contents = contents
                         )
-                    nextOffset += self.linkTargetIdList.sizeOfIdList
+                    nextOffset += self.linkTargetIdList.totalSize
                 else:
                     self.linkTargetIdList = _LinkTargetIDList(offset = 0, contents = None)
 
@@ -642,7 +824,15 @@ class LNK:
     def pack(self):
         shellLinkHeaderContents = self.shellLinkHeader.pack()
 
-        contents = shellLinkHeaderContents # +
+        linkTargetIdListContents = b""
+        if self.shellLinkHeader.HasLinkTargetIDList:
+            linkTargetIdListContents = self.linkTargetIdList.pack()
+
+        linkInfoContents = b""
+        if self.shellLinkHeader.HasLinkInfo:
+            linkInfoContents = self.linkInfo.pack()
+
+        contents = shellLinkHeaderContents + linkTargetIdListContents + linkInfoContents # +
 
         return contents
     
@@ -662,6 +852,6 @@ class LNK:
 if __name__ == "__main__":
     lnk = LNK("calc.lnk")
 
-    packed = lnk.pack()
+    packed = lnk.packAndSave("test.lnk")
 
     print("junk")
