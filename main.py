@@ -687,6 +687,7 @@ class _LinkInfo:
     
 
 class _StringData:
+    shellLinkHeader: _ShellLinkHeader
     NAME_STRING: str = ""
     RELATIVE_PATH: str = ""
     WORKING_DIR: str = ""
@@ -724,6 +725,7 @@ class _StringData:
     def __init__(self, shellLinkHeader: _ShellLinkHeader, offset: int, contents: bytes):
         if offset != 0 and contents != None:
             offsetLocal = 0
+            self.shellLinkHeader = shellLinkHeader
 
             # NAME_STRING
             if shellLinkHeader.HasName:
@@ -756,7 +758,35 @@ class _StringData:
                 offsetLocal += offsetLocalIncrement
 
     def pack(self):
-        pass # TODO
+        contents = b""
+
+        # NAME_STRING
+        if self.shellLinkHeader.HasName:
+            contents += packUshort(len(self.NAME_STRING))
+            contents += (packStringUtf16Le(self.NAME_STRING) if self.NAME_STRING_IS_UNICODE else packStringUtf8(self.NAME_STRING))
+
+        # RELATIVE_PATH
+        if self.shellLinkHeader.HasRelativePath:
+            contents += packUshort(len(self.RELATIVE_PATH))
+            contents += (packStringUtf16Le(self.RELATIVE_PATH) if self.RELATIVE_PATH_IS_UNICODE else packStringUtf8(self.RELATIVE_PATH))
+
+        # WORKING_DIR
+        if self.shellLinkHeader.HasWorkingDir:
+            contents += packUshort(len(self.WORKING_DIR))
+            contents += (packStringUtf16Le(self.WORKING_DIR) if self.WORKING_DIR_IS_UNICODE else packStringUtf8(self.WORKING_DIR))
+
+        # COMMAND_LINE_ARGUMENTS
+        if self.shellLinkHeader.HasArguments:
+            contents += packUshort(len(self.COMMAND_LINE_ARGUMENTS))
+            contents += (packStringUtf16Le(self.COMMAND_LINE_ARGUMENTS) if self.COMMAND_LINE_ARGUMENTS_IS_UNICODE else packStringUtf8(self.COMMAND_LINE_ARGUMENTS))
+
+        # ICON_LOCATION
+        if self.shellLinkHeader.HasIconLocation:
+            contents += packUshort(len(self.ICON_LOCATION))
+            contents += (packStringUtf16Le(self.ICON_LOCATION) if self.ICON_LOCATION_IS_UNICODE else packStringUtf8(self.ICON_LOCATION))
+
+        return contents
+
 
 
 # SUB-STRUCTURES CLASSES END
@@ -823,17 +853,11 @@ class LNK:
     # Pack into LNK
     def pack(self):
         shellLinkHeaderContents = self.shellLinkHeader.pack()
+        linkTargetIdListContents = self.linkTargetIdList.pack() if self.shellLinkHeader.HasLinkTargetIDList else b""
+        linkInfoContents = self.linkInfo.pack() if self.shellLinkHeader.HasLinkInfo else b""
+        stringDataContents = self.stringData.pack()
 
-        linkTargetIdListContents = b""
-        if self.shellLinkHeader.HasLinkTargetIDList:
-            linkTargetIdListContents = self.linkTargetIdList.pack()
-
-        linkInfoContents = b""
-        if self.shellLinkHeader.HasLinkInfo:
-            linkInfoContents = self.linkInfo.pack()
-
-        contents = shellLinkHeaderContents + linkTargetIdListContents + linkInfoContents # +
-
+        contents = shellLinkHeaderContents + linkTargetIdListContents + linkInfoContents + stringDataContents
         return contents
     
     # Pack into LNK and write out the file
